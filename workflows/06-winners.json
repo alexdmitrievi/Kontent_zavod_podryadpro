@@ -1,0 +1,116 @@
+{
+  "name": "KZ-06-Winners",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 22 * * 0" }] }
+      },
+      "name": "Sunday 22:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=select * from posts where viral_label in ('viral','mega') and published_at >= now() - interval '8 days' and (recycle is null or recycle = '') order by viral_velocity desc limit 10;"
+      },
+      "name": "Pull Winners",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 220],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "name": "Loop Winners",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env[\"ANTHROPIC_API_KEY\"]}}" },
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\":\"claude-sonnet-4-6\",\n  \"max_tokens\":1000,\n  \"temperature\":0.5,\n  \"system\":\"Produce 3 clone variants for a winning short. Return strict JSON array of {variant, hook, template, first_frame_strategy, reason}.\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"Original: hook={{$json.hook_text}}, template={{$json.template}}, velocity={{$json.viral_velocity}}\"}]\n}"
+      },
+      "name": "Gen Clone Specs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "url": "={{$env[\"N8N_EVENT_BUS_URL\"]}}/events/render",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow\":\"03-edit-render\",\n  \"candidate_id\":\"{{$json.candidate_id}}\",\n  \"clone\":true,\n  \"override_hook\":\"{{$json.new_hook}}\",\n  \"override_template\":\"{{$json.new_template}}\"\n}"
+      },
+      "name": "Enqueue Clone Renders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=update posts set recycle = 'archived' where viral_label = 'dud' and published_at <= now() - interval '7 days' and (recycle is null or recycle = '');"
+      },
+      "name": "Archive Losers",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 420],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=with q as (\n  select platform,\n         percentile_cont(0.25) within group (order by views_24h) as p25,\n         percentile_cont(0.75) within group (order by views_24h) as p75,\n         percentile_cont(0.95) within group (order by views_24h) as p95,\n         percentile_cont(0.99) within group (order by views_24h) as p99\n  from (\n    select p.platform, m.views as views_24h\n    from posts p join metrics m on m.post_id = p.post_id\n    where m.hours_since = 24 and p.published_at >= now() - interval '60 days'\n  ) s group by platform\n)\nupdate viral_thresholds vt\n   set dud_ceiling = q.p25,\n       ok_ceiling  = q.p75,\n       hit_ceiling = q.p95,\n       viral_ceiling = q.p99,\n       mega_floor  = q.p99,\n       updated_at = now()\n   from q where vt.platform = q.platform;"
+      },
+      "name": "Recalibrate Thresholds",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 420],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{$env[\"TELEGRAM_OPS_CHAT_ID\"]}}",
+        "text": "=📊 *Weekly winners run*\n\nWinners cloned: {{$json.winners_n}}\nLosers archived: {{$json.losers_n}}\nThresholds recalibrated ✅",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "name": "Telegram Weekly",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1340, 320],
+      "credentials": { "telegramApi": { "id": "telegram-ops", "name": "Telegram Ops" } }
+    }
+  ],
+  "connections": {
+    "Sunday 22:00":   { "main": [[
+      { "node": "Pull Winners", "type": "main", "index": 0 },
+      { "node": "Archive Losers", "type": "main", "index": 0 }
+    ]] },
+    "Pull Winners":          { "main": [[{ "node": "Loop Winners", "type": "main", "index": 0 }]] },
+    "Loop Winners":          { "main": [[{ "node": "Gen Clone Specs", "type": "main", "index": 0 }]] },
+    "Gen Clone Specs":       { "main": [[{ "node": "Enqueue Clone Renders", "type": "main", "index": 0 }]] },
+    "Enqueue Clone Renders": { "main": [[{ "node": "Telegram Weekly", "type": "main", "index": 0 }]] },
+    "Archive Losers":        { "main": [[{ "node": "Recalibrate Thresholds", "type": "main", "index": 0 }]] },
+    "Recalibrate Thresholds":{ "main": [[{ "node": "Telegram Weekly", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","analytics","optimization"]
+}

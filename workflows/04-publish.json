@@ -1,0 +1,225 @@
+{
+  "name": "KZ-04-Publish",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 10 }]
+        }
+      },
+      "name": "Cron 10min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "posts",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "status", "condition": "in", "keyValue": "(approved,auto_ok)" },
+            { "keyName": "scheduled_at", "condition": "lte", "keyValue": "={{$now.toISO()}}" }
+          ]
+        }
+      },
+      "name": "Due Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "name": "Loop Posts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{$env[\"R2_ACCOUNT_ID\"]}}.r2.cloudflarestorage.com/{{$env[\"R2_BUCKET\"]}}/{{$json.asset_key}}",
+        "method": "GET",
+        "options": { "redirect": { "redirect": {} } }
+      },
+      "name": "Presign Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "dataPropertyName": "platform",
+        "rules": {
+          "rules": [
+            { "operation": "equal", "value2": "TT", "output": 0 },
+            { "operation": "equal", "value2": "IG", "output": 1 },
+            { "operation": "equal", "value2": "YT", "output": 2 },
+            { "operation": "equal", "value2": "FB", "output": 3 }
+          ]
+        }
+      },
+      "name": "Route Platform",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://app.ayrshare.com/api/post",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"AYRSHARE_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post\": \"{{$json.caption}} {{$json.hashtags.join(' ')}}\",\n  \"platforms\":[\"tiktok\"],\n  \"mediaUrls\":[\"{{$json.presigned_url}}\"]\n}"
+      },
+      "name": "Post TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 160]
+    },
+    {
+      "parameters": {
+        "url": "https://app.ayrshare.com/api/post",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"AYRSHARE_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post\": \"{{$json.caption}}\\n\\n{{$json.hashtags.join(' ')}}\",\n  \"platforms\":[\"instagram\"],\n  \"mediaUrls\":[\"{{$json.presigned_url}}\"]\n}"
+      },
+      "name": "Post Reels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 280]
+    },
+    {
+      "parameters": {
+        "url": "https://app.ayrshare.com/api/post",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"AYRSHARE_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post\": \"{{$json.caption}}\",\n  \"platforms\":[\"youtube\"],\n  \"mediaUrls\":[\"{{$json.presigned_url}}\"],\n  \"youTubeOptions\":{\"title\":\"{{$json.title}}\",\"shorts\":true,\"visibility\":\"public\",\"tags\":{{JSON.stringify($json.hashtags)}}}\n}"
+      },
+      "name": "Post Shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://app.ayrshare.com/api/post",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"AYRSHARE_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"post\": \"{{$json.caption}}\\n\\n{{$json.hashtags.join(' ')}}\",\n  \"platforms\":[\"facebook\"],\n  \"mediaUrls\":[\"{{$json.presigned_url}}\"],\n  \"faceBookOptions\":{\"reels\":true}\n}"
+      },
+      "name": "Post FB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 520]
+    },
+    {
+      "parameters": {
+        "tableId": "posts",
+        "operation": "update",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "post_id", "condition": "eq", "keyValue": "={{$json.post_id}}" }
+          ]
+        },
+        "dataMode": "autoMapInputData",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status",       "fieldValue": "published" },
+            { "fieldId": "published_at", "fieldValue": "={{$now.toISO()}}" },
+            { "fieldId": "external_id",  "fieldValue": "={{$json.ayrshare_id}}" }
+          ]
+        }
+      },
+      "name": "Update post=published",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1780, 320],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Seed metrics poll rows at t+1h, +6h, +24h, +72h, +7d.\nconst post = $input.first().json;\nconst offsets = [1, 6, 24, 72, 168];\nreturn offsets.map(h => ({ json: {\n  post_id: post.post_id,\n  scheduled_for: new Date(Date.now() + h*3600*1000).toISOString(),\n  hours_since: h\n}}));"
+      },
+      "name": "Seed Metrics Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 320]
+    },
+    {
+      "parameters": {
+        "tableId": "metrics",
+        "dataMode": "autoMapInputData"
+      },
+      "name": "Insert Metric Rows",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2220, 320],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{$env[\"TELEGRAM_OPS_CHAT_ID\"]}}",
+        "text": "=🚀 Posted *{{$json.post_id}}* — {{$json.platform}} — view: {{$json.permalink}}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "name": "Telegram Posted",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2440, 320],
+      "credentials": { "telegramApi": { "id": "telegram-ops", "name": "Telegram Ops" } }
+    }
+  ],
+  "connections": {
+    "Cron 10min":            { "main": [[{ "node": "Due Posts", "type": "main", "index": 0 }]] },
+    "Due Posts":             { "main": [[{ "node": "Loop Posts", "type": "main", "index": 0 }]] },
+    "Loop Posts":            { "main": [[{ "node": "Presign Video", "type": "main", "index": 0 }]] },
+    "Presign Video":         { "main": [[{ "node": "Route Platform", "type": "main", "index": 0 }]] },
+    "Route Platform":        { "main": [
+      [{ "node": "Post TikTok", "type": "main", "index": 0 }],
+      [{ "node": "Post Reels",  "type": "main", "index": 0 }],
+      [{ "node": "Post Shorts", "type": "main", "index": 0 }],
+      [{ "node": "Post FB",     "type": "main", "index": 0 }]
+    ] },
+    "Post TikTok": { "main": [[{ "node": "Update post=published", "type": "main", "index": 0 }]] },
+    "Post Reels":  { "main": [[{ "node": "Update post=published", "type": "main", "index": 0 }]] },
+    "Post Shorts": { "main": [[{ "node": "Update post=published", "type": "main", "index": 0 }]] },
+    "Post FB":     { "main": [[{ "node": "Update post=published", "type": "main", "index": 0 }]] },
+    "Update post=published": { "main": [[{ "node": "Seed Metrics Rows", "type": "main", "index": 0 }]] },
+    "Seed Metrics Rows":     { "main": [[{ "node": "Insert Metric Rows", "type": "main", "index": 0 }]] },
+    "Insert Metric Rows":    { "main": [[{ "node": "Telegram Posted", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","publish","social"]
+}

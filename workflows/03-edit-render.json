@@ -1,0 +1,175 @@
+{
+  "name": "KZ-03-Edit-Render",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "events/render",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook /events/render",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "candidates",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "candidate_id", "condition": "eq", "keyValue": "={{$json.body.candidate_id}}" }
+          ]
+        }
+      },
+      "name": "Load Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Build per-platform variant specs from one candidate.\n// Default: 2 variants per platform (different hook + slight pacing tweak).\nconst c = $input.first().json[0];\nconst platforms = ['TT','IG','YT','FB'];\nconst hooks = (c.hooks || []).slice(0, 4); // ensure at least 4\nconst specs = [];\nfor (const p of platforms) {\n  for (let v = 1; v <= 2; v++) {\n    const hook = hooks[(v - 1) % hooks.length];\n    specs.push({\n      candidate_id: c.candidate_id,\n      clip_id:      c.clip_id,\n      template:     c.template,\n      start_s:      c.start_s,\n      end_s:        c.end_s,\n      platform:     p,\n      variant:      `v${v}`,\n      hook:         hook,\n      caption_pack: (c.captions || {})[p.toLowerCase()],\n      viral_score:  c.viral_score\n    });\n  }\n}\nreturn specs.map(s => ({ json: s }));"
+      },
+      "name": "Pick Variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Loop Variants",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "command": "=set -e;\nKEY=$(echo '{{JSON.stringify($json)}}' | jq -r '.clip_id');\nrclone copy r2:${R2_BUCKET}/raw/.../${KEY}.mp4 /tmp/;"
+      },
+      "name": "Download Source",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate subs.ass from Whisper SRT chunks + hook overlay.\n// (Reference impl - real code lives on the render VPS as build_ass.py)\nconst { hook, subtitles_chunks } = $input.first().json;\nconst events = [];\nevents.push(`Dialogue: 0,0:00:00.00,0:00:01.40,Hook,,0,0,0,,{\\\\fad(40,40)}${hook.text.toUpperCase()}`);\nfor (const c of subtitles_chunks || []) {\n  events.push(`Dialogue: 0,${secToAss(c.start)},${secToAss(c.end)},Default,,0,0,0,,{\\\\fad(40,40)}${c.text}`);\n}\nfunction secToAss(s){const h=Math.floor(s/3600),m=Math.floor(s/60)%60,ss=(s%60).toFixed(2).padStart(5,'0');return `${h}:${m.toString().padStart(2,'0')}:${ss}`;}\nreturn [{ json: { ...$input.first().json, ass: events.join('\\n') } }];"
+      },
+      "name": "Build ASS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "command": "=set -e;\nSPEC='{{JSON.stringify($json)}}';\nCLIP=$(jq -r '.clip_id' <<<$SPEC);\nSTART=$(jq -r '.start_s' <<<$SPEC);\nEND=$(jq -r '.end_s' <<<$SPEC);\nPLATFORM=$(jq -r '.platform' <<<$SPEC);\nVARIANT=$(jq -r '.variant' <<<$SPEC);\nMOOD=mood\nOUT=/tmp/${CLIP}-${PLATFORM}-${VARIANT}.mp4\necho $(jq -r '.ass' <<<$SPEC) > /tmp/${CLIP}-${PLATFORM}-${VARIANT}.ass\nffmpeg -y -ss $START -to $END -i /tmp/${CLIP}.mp4 -i /opt/music/${MOOD}.mp3 \\\n  -filter_complex \"[0:v]scale=1080:-2,crop=1080:1920,setpts=PTS-STARTPTS,eq=contrast=1.08:saturation=1.15,subtitles=/tmp/${CLIP}-${PLATFORM}-${VARIANT}.ass[v];[0:a]volume=0.9,afade=t=in:d=0.3[a1];[1:a]volume=0.6,afade=t=in:d=0.3[a2];[a1][a2]amix=inputs=2:duration=longest[a]\" \\\n  -map \"[v]\" -map \"[a]\" -c:v libx264 -preset veryfast -crf 19 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 192k -ar 48000 -movflags +faststart $OUT\nls -la $OUT"
+      },
+      "name": "FFmpeg Render",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "command": "=ffprobe -v error -show_streams -show_format -of json /tmp/{{$json.clip_id}}-{{$json.platform}}-{{$json.variant}}.mp4"
+      },
+      "name": "QA Check",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "command": "=rclone copy /tmp/{{$json.clip_id}}-{{$json.platform}}-{{$json.variant}}.mp4 r2:${R2_BUCKET}/processed/{{$now.year}}/{{$now.month.padStart(2,'0')}}/{{$now.day.padStart(2,'0')}}/"
+      },
+      "name": "R2 Upload Rendered",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "posts",
+        "dataMode": "autoMapInputData",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "post_id",         "fieldValue": "={{$json.clip_id}}-{{$json.platform}}-{{$json.variant}}" },
+            { "fieldId": "candidate_id",    "fieldValue": "={{$json.candidate_id}}" },
+            { "fieldId": "clip_id",         "fieldValue": "={{$json.clip_id}}" },
+            { "fieldId": "platform",        "fieldValue": "={{$json.platform}}" },
+            { "fieldId": "variant",         "fieldValue": "={{$json.variant}}" },
+            { "fieldId": "asset_url",       "fieldValue": "=https://...r2.../processed/.../{{$json.clip_id}}-{{$json.platform}}-{{$json.variant}}.mp4" },
+            { "fieldId": "caption",         "fieldValue": "={{$json.caption_pack.caption}}" },
+            { "fieldId": "hashtags",        "fieldValue": "={{JSON.stringify($json.caption_pack.hashtags)}}" },
+            { "fieldId": "hook_text",       "fieldValue": "={{$json.hook.text}}" },
+            { "fieldId": "hook_id",         "fieldValue": "={{$json.hook.hook_id}}" },
+            { "fieldId": "viral_score_pre", "fieldValue": "={{$json.viral_score}}" },
+            { "fieldId": "template",        "fieldValue": "={{$json.template}}" },
+            { "fieldId": "status",          "fieldValue": "={{ ($json.viral_score >= 80) ? 'auto_ok' : 'pending' }}" }
+          ]
+        }
+      },
+      "name": "Insert Post",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2220, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": "={{$env[\"AIRTABLE_BASE_ID\"]}}",
+        "table": "Queue",
+        "fieldsUi": {
+          "fieldsValues": [
+            { "fieldName": "Post ID", "fieldValue": "={{$json.post_id}}" },
+            { "fieldName": "Hook",    "fieldValue": "={{$json.hook.text}}" },
+            { "fieldName": "Caption", "fieldValue": "={{$json.caption_pack.caption}}" },
+            { "fieldName": "Platform","fieldValue": "={{$json.platform}}" },
+            { "fieldName": "Variant", "fieldValue": "={{$json.variant}}" },
+            { "fieldName": "Viral score", "fieldValue": "={{$json.viral_score}}" }
+          ]
+        }
+      },
+      "name": "Airtable Queue",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [2440, 300],
+      "credentials": { "airtableTokenApi": { "id": "airtable", "name": "Airtable" } }
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{$env[\"TELEGRAM_OPS_CHAT_ID\"]}}",
+        "text": "=✂️ Variant ready: {{$json.post_id}} — score {{$json.viral_score}}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "name": "Telegram Notify",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2660, 300],
+      "credentials": { "telegramApi": { "id": "telegram-ops", "name": "Telegram Ops" } }
+    }
+  ],
+  "connections": {
+    "Webhook /events/render": { "main": [[{ "node": "Load Candidate", "type": "main", "index": 0 }]] },
+    "Load Candidate":         { "main": [[{ "node": "Pick Variants", "type": "main", "index": 0 }]] },
+    "Pick Variants":          { "main": [[{ "node": "Loop Variants", "type": "main", "index": 0 }]] },
+    "Loop Variants":          { "main": [[{ "node": "Download Source", "type": "main", "index": 0 }]] },
+    "Download Source":        { "main": [[{ "node": "Build ASS", "type": "main", "index": 0 }]] },
+    "Build ASS":              { "main": [[{ "node": "FFmpeg Render", "type": "main", "index": 0 }]] },
+    "FFmpeg Render":          { "main": [[{ "node": "QA Check", "type": "main", "index": 0 }]] },
+    "QA Check":               { "main": [[{ "node": "R2 Upload Rendered", "type": "main", "index": 0 }]] },
+    "R2 Upload Rendered":     { "main": [[{ "node": "Insert Post", "type": "main", "index": 0 }]] },
+    "Insert Post":            { "main": [[{ "node": "Airtable Queue", "type": "main", "index": 0 }]] },
+    "Airtable Queue":         { "main": [[{ "node": "Telegram Notify", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","render","ffmpeg"]
+}

@@ -1,0 +1,215 @@
+{
+  "name": "KZ-01-Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "name": "Cron 5min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "list",
+        "options": {
+          "fields": ["id", "name", "mimeType", "modifiedTime", "size", "parents"],
+          "q": "'={{$json[\"DRIVE_INBOX_FOLDER_ID\"]}}' in parents and trashed = false and (mimeType contains 'video/')"
+        }
+      },
+      "name": "List Drive Inbox",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "gdrive", "name": "Google Drive" }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Iterate",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [],
+          "string": [
+            {
+              "value1": "={{ $json[\"mimeType\"] }}",
+              "operation": "startsWith",
+              "value2": "video/"
+            }
+          ]
+        }
+      },
+      "name": "Is Video",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": "={{ $json[\"id\"] }}"
+      },
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1120, 220],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "gdrive", "name": "Google Drive" }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=ffprobe -v error -show_streams -show_format -of json {{$binary.data.fileName}}"
+      },
+      "name": "ffprobe",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate job_id and clip_id; infer cam from filename + EXIF\nconst fn = $input.first().json.name || '';\nconst nowDate = new Date().toISOString().slice(0,10).replace(/-/g,'');\n\nlet cam = 'A';\nif (/^DJI/i.test(fn))      cam = 'C';\nelse if (/^G[HX]/i.test(fn) || /^INS_/i.test(fn) || /^LRV/i.test(fn)) cam = 'D';\nelse if (/^IMG/i.test(fn)) cam = 'A';\n\nconst service = 'OTHER'; // placeholder until slate parser fires\nconst seq = '01';        // resolve from Supabase select max+1 in next node\nconst job_id  = `${nowDate}-${service}-${seq}`;\nconst clip_id = `${job_id}-${cam}-001`;\n\nreturn [{ json: { job_id, clip_id, cam, source_name: fn } }];"
+      },
+      "name": "Generate IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 220]
+    },
+    {
+      "parameters": {
+        "command": "=whisper-ctranslate2 --model large-v3 --language auto --output_format txt --max_duration 8 --vad_filter True {{$binary.data.fileName}} > slate.txt && head -c 2000 slate.txt"
+      },
+      "name": "Whisper Slate",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1780, 220]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse address, service, phase from slate transcript\nconst t = ($input.first().json.stdout || '').toLowerCase();\nconst phase = /\\bbefore|до\\b/.test(t) ? 'before'\n            : /\\bafter|после\\b/.test(t) ? 'after'\n            : 'unknown';\n\nconst svcMap = {\n  'lawn': 'MOW','mow':'MOW','газон':'MOW',\n  'overgrow': 'OVR','зарос':'OVR',\n  'pool': 'POO','бассейн':'POO',\n  'stump':'STM','пень':'STM',\n  'tree':'TRE','дерев':'TRE',\n  'clear':'CLR','расч':'CLR',\n  'clean':'CLN','уборк':'CLN',\n  'plow':'PLW','вспа':'PLW',\n  'maint':'MNT'\n};\nlet service = 'OTHER';\nfor (const k of Object.keys(svcMap)) { if (t.includes(k)) { service = svcMap[k]; break; } }\n\nconst addrMatch = t.match(/([a-zа-я0-9\\-.\\s]{4,80})(?:,| дата| address)/i);\nconst address = addrMatch ? addrMatch[1].trim() : null;\n\nreturn [{ json: { service, phase, address, slate_transcript: t } }];"
+      },
+      "name": "Parse Slate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 220]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{$env[\"R2_ACCOUNT_ID\"]}}.r2.cloudflarestorage.com/{{$env[\"R2_BUCKET\"]}}/raw/{{$now.year}}/{{$now.month.padStart(2,'0')}}/{{$now.day.padStart(2,'0')}}/{{$json[\"job_id\"]}}/{{$json[\"clip_id\"]}}.mp4",
+        "method": "PUT",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "awsCredential",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "name": "R2 Upload Raw",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2220, 220],
+      "credentials": {
+        "awsCredential": { "id": "r2", "name": "Cloudflare R2" }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=ffmpeg -y -ss 00:00:02 -i {{$binary.data.fileName}} -frames:v 1 -q:v 2 thumb.jpg && stat -c '%s' thumb.jpg"
+      },
+      "name": "Make Thumbnail",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2440, 220]
+    },
+    {
+      "parameters": {
+        "tableId": "clips",
+        "dataMode": "autoMapInputData",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "clip_id",          "fieldValue": "={{$json[\"clip_id\"]}}" },
+            { "fieldId": "job_id",           "fieldValue": "={{$json[\"job_id\"]}}" },
+            { "fieldId": "cam",              "fieldValue": "={{$json[\"cam\"]}}" },
+            { "fieldId": "shot_seq",         "fieldValue": "=1" },
+            { "fieldId": "storage_key",      "fieldValue": "=raw/{{$now.year}}/{{$now.month.padStart(2,'0')}}/{{$now.day.padStart(2,'0')}}/{{$json[\"job_id\"]}}/{{$json[\"clip_id\"]}}.mp4" },
+            { "fieldId": "duration_s",       "fieldValue": "={{$json[\"duration_s\"]}}" },
+            { "fieldId": "slate_address",    "fieldValue": "={{$json[\"address\"]}}" },
+            { "fieldId": "slate_service",    "fieldValue": "={{$json[\"service\"]}}" },
+            { "fieldId": "slate_phase",      "fieldValue": "={{$json[\"phase\"]}}" },
+            { "fieldId": "status",           "fieldValue": "ingested" }
+          ]
+        }
+      },
+      "name": "Insert clip row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2660, 220],
+      "credentials": {
+        "supabaseApi": { "id": "supabase", "name": "Supabase" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "update",
+        "fileId": "={{$json[\"id\"]}}",
+        "options": { "parents": "={{$env[\"DRIVE_ARCHIVE_FOLDER_ID\"]}}" }
+      },
+      "name": "Move to _archived",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2880, 220],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "gdrive", "name": "Google Drive" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$env[\"N8N_EVENT_BUS_URL\"]}}/events",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow\": \"02-classification\",\n  \"clip_id\": \"{{$json[\"clip_id\"]}}\"\n}"
+      },
+      "name": "Enqueue Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, 220]
+    }
+  ],
+  "connections": {
+    "Cron 5min":         { "main": [[{ "node": "List Drive Inbox", "type": "main", "index": 0 }]] },
+    "List Drive Inbox":  { "main": [[{ "node": "Iterate", "type": "main", "index": 0 }]] },
+    "Iterate":           { "main": [[{ "node": "Is Video", "type": "main", "index": 0 }]] },
+    "Is Video":          { "main": [[{ "node": "Download File", "type": "main", "index": 0 }]] },
+    "Download File":     { "main": [[{ "node": "ffprobe", "type": "main", "index": 0 }]] },
+    "ffprobe":           { "main": [[{ "node": "Generate IDs", "type": "main", "index": 0 }]] },
+    "Generate IDs":      { "main": [[{ "node": "Whisper Slate", "type": "main", "index": 0 }]] },
+    "Whisper Slate":     { "main": [[{ "node": "Parse Slate", "type": "main", "index": 0 }]] },
+    "Parse Slate":       { "main": [[{ "node": "R2 Upload Raw", "type": "main", "index": 0 }]] },
+    "R2 Upload Raw":     { "main": [[{ "node": "Make Thumbnail", "type": "main", "index": 0 }]] },
+    "Make Thumbnail":    { "main": [[{ "node": "Insert clip row", "type": "main", "index": 0 }]] },
+    "Insert clip row":   { "main": [[{ "node": "Move to _archived", "type": "main", "index": 0 }]] },
+    "Move to _archived": { "main": [[{ "node": "Enqueue Classify", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","ingestion"]
+}
