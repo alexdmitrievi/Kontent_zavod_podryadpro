@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-config.json",
+  "_comment": "Drop-in MCP config for the Kontent Zavod factory. See docs/14-mcp-setup.md for setup, credentials and trade-offs. After editing, restart Claude Code to load the servers.",
+
+  "mcpServers": {
+
+    "higgsfield": {
+      "_comment": "Official hosted MCP. 30+ image/video models (Veo, Sora, Kling, Flux, Nano Banana, Seedance, Soul). OAuth in the browser on first call — no API key needed here.",
+      "type": "http",
+      "url": "https://mcp.higgsfield.ai/mcp"
+    },
+
+    "posteverywhere": {
+      "_comment": "Official PostEverywhere MCP. Publishes / schedules to Instagram, TikTok, YouTube, Facebook, LinkedIn, X, Threads, Pinterest. Replace the API key with your own from posteverywhere.ai → Settings → Developers.",
+      "command": "npx",
+      "args": ["-y", "@posteverywhere/mcp"],
+      "env": {
+        "POSTEVERYWHERE_API_KEY": "pe_live_REPLACE_ME"
+      }
+    },
+
+    "postiz": {
+      "_comment": "Self-hosted Postiz MCP. Free, blueprint's default publisher. POSTIZ_URL is your own Postiz instance, POSTIZ_API_KEY is the per-user key from Postiz Settings → API. Disable this block if you don't self-host Postiz yet.",
+      "type": "http",
+      "url": "https://postiz.your-domain.tld/api/mcp/REPLACE_WITH_POSTIZ_API_KEY"
+    },
+
+    "ayrshare_docs": {
+      "_comment": "Ayrshare's documentation MCP. Read-only. Use it when wiring Ayrshare HTTP calls inside n8n — it lets the agent answer 'how do I post a YouTube Short with the Ayrshare API?'. NOT a publisher itself.",
+      "type": "http",
+      "url": "https://www.ayrshare.com/docs/mcp"
+    }
+  }
+}

@@ -25,7 +25,7 @@ and explicit reasons. Updated for the 2026 landscape.
 | TTS (voiceover, rarely needed)  | ElevenLabs Turbo v2.5             | $0.10 / 1k chr | Google TTS Standard        | ElevenLabs Multilingual v2 |
 | Music                           | Suno v4 / Udio                    | $10/mo         | TikTok native sounds       | Epidemic Sound $15   |
 | Image generation (thumbs)       | Flux 1.1 [pro] via Replicate      | $0.04 / img    | Flux schnell self-hosted   | Midjourney v7 $10/mo |
-| Generative video (rare)         | Kling 2.0 Master                  | $0.07 / sec    | Skip                       | Runway Gen-3 Alpha   |
+| Generative image + video (rare) | **Higgsfield MCP** (Veo/Kling/Sora/Soul) | OAuth, 150 free credits/mo + paid | Self-host SD/Flux schnell | Kling 3.0 / Runway Gen-3 direct |
 | Editor (automated)              | FFmpeg                            | $0             | —                          | —                    |
 | Editor (manual hero)            | CapCut Pro                        | $7.99/mo       | DaVinci Resolve free       | Premiere Pro $22.99  |
 | DB / metadata                   | Supabase                          | free → $25/mo  | Self-host Postgres         | Neon $19/mo          |
@@ -90,11 +90,16 @@ Total: **$28–62 / month** for the full stack at 30 unique videos/week.
   (e.g. for Shorts thumbnail or pinned Reel cover).
 - Generated on demand via Replicate, ~$0.04 each, cached in R2.
 
-### Kling / Runway — for **rare** synthetic b-roll
+### Higgsfield MCP — for **rare** synthetic b-roll
 
-- Used when raw footage is missing a key shot (e.g. a perfect drone reveal).
+- One hosted MCP server exposes 30+ image and video models (Veo 3.1,
+  Kling 3.0, Sora 2, Seedance 2.0, Flux 2, Nano Banana Pro, Soul V2).
+- Used when raw footage is missing a key shot (e.g. a perfect drone
+  reveal you forgot to fly).
 - 99 % of videos do not need this.
-- Budget cap: $20/month max.
+- Free tier: 150 credits/month. Budget cap: $25/month if you exceed.
+- Setup: `claude mcp add --transport http --scope user higgsfield https://mcp.higgsfield.ai/mcp`
+- See `docs/14-mcp-setup.md`.
 
 ### FFmpeg — the render engine
 

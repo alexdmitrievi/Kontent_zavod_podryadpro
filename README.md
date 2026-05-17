@@ -48,7 +48,9 @@ traffic funneled to **Telegram** for DMs and leads.
 │   ├── 10-telegram-funnel.md       ← viral → Telegram → DM → lead
 │   ├── 11-analytics.md             ← KPIs, viral score, A/B, cloning
 │   ├── 12-content-matrix.md        ← 12-category content matrix
-│   └── 13-low-budget.md            ← 1-person, sub-$300/mo playbook
+│   ├── 13-low-budget.md            ← 1-person, sub-$300/mo playbook
+│   └── 14-mcp-setup.md             ← MCP servers (Higgsfield + publishers)
+├── .mcp.json                       ← drop-in MCP config (placeholders only)
 ├── schemas/
 │   ├── supabase.sql                ← Postgres schema (clips, posts, metrics)
 │   ├── airtable.md                 ← Airtable base structure (UI layer)
