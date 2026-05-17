@@ -1,0 +1,187 @@
+{
+  "name": "KZ-05-Analytics",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] } },
+      "name": "Cron Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "metrics",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "captured_at", "condition": "is_null", "keyValue": "" },
+            { "keyName": "scheduled_for", "condition": "lte", "keyValue": "={{$now.toISO()}}" }
+          ]
+        },
+        "options": { "qsLimit": 50 }
+      },
+      "name": "Due Polls",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": { "batchSize": 5, "options": {} },
+      "name": "Loop Polls",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://app.ayrshare.com/api/analytics/post",
+        "method": "GET",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"AYRSHARE_API_KEY\"]}}" }]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "id", "value": "={{$json.external_id}}" }]
+        }
+      },
+      "name": "Pull Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Compute velocity + engagement, label viral tier\nconst d = $input.first().json;\nconst hours = d.hours_since || 1;\nconst views = d.views || 0;\nconst velocity_raw = views / hours;\n\n// fetch baseline_24h from system (cached in env or simple table)\nconst baseline = parseFloat($env.BASELINE_VIEWS_24H_TT || 1000);\nconst velocity_pct = views / baseline;\n\n// engagement\nconst eng = ((d.likes||0) + (d.shares||0)*5 + (d.comments||0)*3) / Math.max(views,1);\n\nlet label = 'unknown';\nif (hours >= 24) {\n  if (views < baseline*0.1) label = 'dud';\n  else if (views < baseline*1) label = 'ok';\n  else if (views < baseline*10) label = 'hit';\n  else if (views < baseline*100) label = 'viral';\n  else label = 'mega';\n}\n\nreturn [{ json: { ...d, velocity_raw, velocity_pct, engagement: eng, label } }];"
+      },
+      "name": "Compute Velocity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "metrics",
+        "operation": "update",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "metric_id", "condition": "eq", "keyValue": "={{$json.metric_id}}" }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "captured_at", "fieldValue": "={{$now.toISO()}}" },
+            { "fieldId": "views",       "fieldValue": "={{$json.views}}" },
+            { "fieldId": "likes",       "fieldValue": "={{$json.likes}}" },
+            { "fieldId": "comments",    "fieldValue": "={{$json.comments}}" },
+            { "fieldId": "shares",      "fieldValue": "={{$json.shares}}" },
+            { "fieldId": "saves",       "fieldValue": "={{$json.saves}}" },
+            { "fieldId": "completion_rate", "fieldValue": "={{$json.completion_rate}}" },
+            { "fieldId": "ret_3s",      "fieldValue": "={{$json.ret_3s}}" }
+          ]
+        }
+      },
+      "name": "Update Metric Row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "tableId": "posts",
+        "operation": "update",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "post_id", "condition": "eq", "keyValue": "={{$json.post_id}}" }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "viral_label",    "fieldValue": "={{$json.label}}" },
+            { "fieldId": "viral_velocity", "fieldValue": "={{$json.velocity_pct}}" }
+          ]
+        }
+      },
+      "name": "Update Post Label",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{$now.hour === 21 && $now.minute < 10}}", "value2": true }
+          ]
+        }
+      },
+      "name": "Is 21:00?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "v_post_24h",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "published_at", "condition": "gte", "keyValue": "={{$now.minus({hours:24}).toISO()}}" }
+          ]
+        }
+      },
+      "name": "24h Posts",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2000, 220],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Aggregate into a digest message\nconst rows = $input.all().map(i => i.json);\nconst total = rows.reduce((s,r)=>s+(r.views_latest||0),0);\nconst top = rows.sort((a,b)=>(b.views_latest||0)-(a.views_latest||0))[0] || {};\nconst worst = rows.sort((a,b)=>(a.views_latest||0)-(b.views_latest||0))[0] || {};\nreturn [{ json: { md:\n`📊 *24h DIGEST*\n\nPosts: ${rows.length}\nTotal views: ${total.toLocaleString()}\nTop: \\`${top.post_id||'-'}\\` — ${top.views_latest||0} views (${(top.viral_velocity||0).toFixed(2)}×)\nWorst: \\`${worst.post_id||'-'}\\` — ${worst.views_latest||0}\n\nNeeds approval: see Airtable Queue`\n}}];"
+      },
+      "name": "Build Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 220]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{$env[\"TELEGRAM_OPS_CHAT_ID\"]}}",
+        "text": "={{$json.md}}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "name": "Telegram Digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2440, 220],
+      "credentials": { "telegramApi": { "id": "telegram-ops", "name": "Telegram Ops" } }
+    }
+  ],
+  "connections": {
+    "Cron Hourly":      { "main": [[{ "node": "Due Polls", "type": "main", "index": 0 }]] },
+    "Due Polls":        { "main": [[{ "node": "Loop Polls", "type": "main", "index": 0 }]] },
+    "Loop Polls":       { "main": [[{ "node": "Pull Stats", "type": "main", "index": 0 }]] },
+    "Pull Stats":       { "main": [[{ "node": "Compute Velocity", "type": "main", "index": 0 }]] },
+    "Compute Velocity": { "main": [[{ "node": "Update Metric Row", "type": "main", "index": 0 }]] },
+    "Update Metric Row":{ "main": [[{ "node": "Update Post Label", "type": "main", "index": 0 }]] },
+    "Update Post Label":{ "main": [[{ "node": "Is 21:00?", "type": "main", "index": 0 }]] },
+    "Is 21:00?":        { "main": [[{ "node": "24h Posts", "type": "main", "index": 0 }]] },
+    "24h Posts":        { "main": [[{ "node": "Build Digest", "type": "main", "index": 0 }]] },
+    "Build Digest":     { "main": [[{ "node": "Telegram Digest", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","analytics"]
+}

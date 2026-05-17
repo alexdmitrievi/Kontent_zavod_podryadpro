@@ -1,0 +1,233 @@
+{
+  "name": "KZ-02-Classification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook /events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            { "value1": "={{$json.body.workflow}}", "operation": "equal", "value2": "02-classification" }
+          ]
+        }
+      },
+      "name": "Route 02",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "tableId": "clips",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            { "keyName": "clip_id", "condition": "eq", "keyValue": "={{$json.body.clip_id}}" }
+          ]
+        }
+      },
+      "name": "Load clip",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "command": "=set -e;\nKEY=\"$(jq -r '.[0].storage_key' <<<'{{JSON.stringify($json)}}')\";\nCLIP_ID=\"$(jq -r '.[0].clip_id' <<<'{{JSON.stringify($json)}}')\";\nDUR=\"$(jq -r '.[0].duration_s' <<<'{{JSON.stringify($json)}}')\";\nSRC=\"/tmp/${CLIP_ID}.mp4\";\nrclone copy r2:${R2_BUCKET}/${KEY} /tmp/;\nmkdir -p /tmp/${CLIP_ID};\nffmpeg -y -i ${SRC} -vf \"fps=5/${DUR},scale=720:-2\" /tmp/${CLIP_ID}/frame_%02d.jpg > /dev/null 2>&1;\nls /tmp/${CLIP_ID}/*.jpg | head -n 5;"
+      },
+      "name": "Sample 5 frames",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "x-goog-api-key", "value": "={{$env[\"GEMINI_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\":[{\"parts\":[{\"text\":\"You analyze landscaping footage. Return strict JSON: {service, phase, scene, time_of_day, weather, mood, overgrowth_level, water_state, machinery_visible, people_visible, viral_kind}. Schema documented at /prompts/. No prose.\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"{{$json.frame1_b64}}\"}},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"{{$json.frame2_b64}}\"}},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"{{$json.frame3_b64}}\"}},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"{{$json.frame4_b64}}\"}},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"{{$json.frame5_b64}}\"}}]}],\n  \"generationConfig\":{\"response_mime_type\":\"application/json\",\"temperature\":0.2}\n}"
+      },
+      "name": "Gemini Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "command": "=whisper-ctranslate2 --model large-v3 --language auto --output_format srt --vad_filter True /tmp/{{$json.clip_id}}.mp4 > /tmp/{{$json.clip_id}}.srt && cat /tmp/{{$json.clip_id}}.srt"
+      },
+      "name": "Whisper Full",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1120, 360]
+    },
+    {
+      "parameters": {
+        "command": "=ffmpeg -i /tmp/{{$json.clip_id}}.mp4 -filter:v \"select='gt(scene,0.4)',showinfo\" -f null - 2>&1 | grep showinfo | awk -F 'pts_time:' '{print $2}' | awk '{print $1}' | paste -sd, -"
+      },
+      "name": "Scene Cuts",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "=Bearer {{$env[\"OPENAI_API_KEY\"]}}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\":\"gpt-4o\",\n  \"temperature\":0.3,\n  \"response_format\":{\"type\":\"json_object\"},\n  \"messages\":[\n    {\"role\":\"system\",\"content\":\"You are a viral short-form editor for landscaping/cleanup. Pick 3-8 candidate sub-clips. Use the moment-detection prompt at /prompts/moment-detection.md. Return JSON {candidates:[...]}\"},\n    {\"role\":\"user\",\"content\":\"DURATION: {{$json.duration_s}}s\\nTAGS: {{$json.gemini_json}}\\nCUTS: {{$json.cuts_csv}}\\nTRANSCRIPT:\\n{{$json.srt}}\"}\n  ]\n}"
+      },
+      "name": "GPT-4o Moments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 380]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Loop Candidates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1560, 380]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env[\"ANTHROPIC_API_KEY\"]}}" },
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\":\"claude-sonnet-4-6\",\n  \"max_tokens\":700,\n  \"temperature\":0.2,\n  \"system\":\"Use the viral-scoring rubric in /prompts/viral-scoring.md. Return strict JSON only.\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"Candidate: {{JSON.stringify($json.candidate)}}\\nContext: {{JSON.stringify($json.context)}}\"}]\n}"
+      },
+      "name": "Claude Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 380]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env[\"ANTHROPIC_API_KEY\"]}}" },
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\":\"claude-sonnet-4-6\",\n  \"max_tokens\":800,\n  \"temperature\":0.7,\n  \"system\":\"Use /prompts/hook-generator.md. 3 EN + 2 RU. Strict JSON.\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"Clip: {{JSON.stringify($json.metadata)}}\\nCandidate: {{JSON.stringify($json.candidate)}}\\nForbidden: {{JSON.stringify($json.forbidden_ids)}}\"}]\n}"
+      },
+      "name": "Claude Hooks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 380]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env[\"ANTHROPIC_API_KEY\"]}}" },
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\":\"claude-sonnet-4-6\",\n  \"max_tokens\":1200,\n  \"temperature\":0.6,\n  \"system\":\"Use /prompts/caption-generator.md. Return JSON per platform.\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"Hook: {{$json.hook}}\\nClip: {{JSON.stringify($json.metadata)}}\\nCTA: {{$json.cta_strategy}}\"}]\n}"
+      },
+      "name": "Claude Captions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2220, 380]
+    },
+    {
+      "parameters": {
+        "tableId": "candidates",
+        "dataMode": "autoMapInputData"
+      },
+      "name": "Insert Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2440, 380],
+      "credentials": { "supabaseApi": { "id": "supabase", "name": "Supabase" } }
+    },
+    {
+      "parameters": {
+        "url": "={{$env[\"N8N_EVENT_BUS_URL\"]}}/events",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow\": \"03-edit-render\",\n  \"candidate_id\": \"{{$json.candidate_id}}\"\n}"
+      },
+      "name": "Enqueue Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2660, 380]
+    }
+  ],
+  "connections": {
+    "Webhook /events":   { "main": [[{ "node": "Route 02", "type": "main", "index": 0 }]] },
+    "Route 02":          { "main": [[{ "node": "Load clip", "type": "main", "index": 0 }]] },
+    "Load clip":         { "main": [[
+        { "node": "Sample 5 frames", "type": "main", "index": 0 },
+        { "node": "Whisper Full",    "type": "main", "index": 0 },
+        { "node": "Scene Cuts",      "type": "main", "index": 0 }
+    ]] },
+    "Sample 5 frames":   { "main": [[{ "node": "Gemini Classify", "type": "main", "index": 0 }]] },
+    "Gemini Classify":   { "main": [[{ "node": "GPT-4o Moments",  "type": "main", "index": 0 }]] },
+    "Whisper Full":      { "main": [[{ "node": "GPT-4o Moments",  "type": "main", "index": 0 }]] },
+    "Scene Cuts":        { "main": [[{ "node": "GPT-4o Moments",  "type": "main", "index": 0 }]] },
+    "GPT-4o Moments":    { "main": [[{ "node": "Loop Candidates", "type": "main", "index": 0 }]] },
+    "Loop Candidates":   { "main": [[{ "node": "Claude Score",    "type": "main", "index": 0 }]] },
+    "Claude Score":      { "main": [[{ "node": "Claude Hooks",    "type": "main", "index": 0 }]] },
+    "Claude Hooks":      { "main": [[{ "node": "Claude Captions", "type": "main", "index": 0 }]] },
+    "Claude Captions":   { "main": [[{ "node": "Insert Candidate","type": "main", "index": 0 }]] },
+    "Insert Candidate":  { "main": [[{ "node": "Enqueue Render",  "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["kontent-zavod","classification","ai"]
+}
